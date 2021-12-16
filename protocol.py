@@ -1,238 +1,244 @@
-from typing import Tuple, List
-import random
+from typing import List
+from copy import deepcopy
 
-from math_modulo import solve_linear_system_eq, solve_quadratic_polynomial, Polynomial, compose, get_tuple_index
+from transformations import (
+    Transformation,
+    AffineTransformation,
+    QuadraticComposition,
+)
+from my_maths import (
+    Polynomial,
+    get_tuple_index,
+    Vector,
+    substract,
+    eval_polynomial,
+)
 import specs
 
 
 class SecretKey:
-    """A secret key consists in 'n_lines' lines.
-    Each line consists in 'n_compositions' (univariate)
-    quadratic polynomials, and a linear combination of 'n_variables' 
-    variables.
-
-    The quadratic polynomials are stored in self.quadratic_polynomials, a 2d list:
-    self.quadratic_polynomials[line_index][composition_index] :
-
-    During the generation of the public key:
-    self.quadratic_polynomials[line_index][0] is composed with a linear combination
-    then self.quadratic_polynomials[line_index][1] is composed with the result above
-    then self.quadratic_polynomials[line_index][2] and so on ...
-
-    The linear combinations are stored in self.linear_combinations : a list of
-    'Polynomial', all with degree = 1
+    """
+    dimensions represents [a_1, .. a_m] (see the article)
     """
 
-    def __init__(self, n_lines: int, n_compositions: int, n_variables: int) -> None:
-        self.n_lines = n_lines
-        self.n_compositions = n_compositions
-        self.n_variables = n_variables
-        self.quadratic_polynomials = [
-            [Polynomial(1) for _ in range(n_compositions)] for __ in range(n_lines)]
-        self.linear_combinations = [Polynomial(
-            n_variables) for _ in range(n_lines)]
+    def __init__(self, dimensions: List[int]) -> None:
+        self.dimensions = dimensions
+        self.transformations: List[Transformation] = []
+        self.transformations.append(
+            AffineTransformation(dimensions[0], dimensions[1])
+        )
+        for index in range(1, len(dimensions) - 1):
+            self.transformations.append(
+                QuadraticComposition(dimensions[index])
+            )
+            self.transformations.append(
+                AffineTransformation(dimensions[index], dimensions[index + 1])
+            )
 
-    def get_number_of_variables(self) -> int:
-        return self.n_variables
+    def get_dimensions(self) -> List[int]:
+        return self.dimensions
 
-    def get_number_of_lines(self) -> int:
-        return self.n_lines
+    def get_n_input(self) -> int:
+        return self.dimensions[0]
 
-    def get_number_of_polynomials_per_line(self) -> int:
-        return self.n_compositions
+    def get_n_output(self) -> int:
+        return self.dimensions[-1]
 
-    def set_quadratic_polynomial(self, line_index: int, quadratic_polynomial_index: int, quadratic_polynomial: Polynomial) -> None:
-        assert quadratic_polynomial.get_degree() == 2
-        assert 0 <= line_index < self.n_lines
-        assert 0 <= quadratic_polynomial_index < self.n_compositions
-        self.quadratic_polynomials[line_index][quadratic_polynomial_index] = quadratic_polynomial
+    def get_n_transformations(self) -> int:
+        return len(self.transformations)
 
-    def get_quadratic_polynomial(self, line_index: int, quadratic_polynomial_index: int) -> Polynomial:
-        assert 0 <= line_index < self.n_lines
-        assert 0 <= quadratic_polynomial_index < self.n_compositions
-        return self.quadratic_polynomials[line_index][quadratic_polynomial_index]
+    def get_n_params(self) -> int:
+        n_params = 0
+        for transformation in self.transformations:
+            n_params += transformation.get_n_params()
+        return n_params
 
-    def set_linear_combination(self, line_index: int, linear_combination: Polynomial) -> None:
-        assert linear_combination.get_degree() == 1
-        assert 0 <= line_index < self.n_lines
-        self.linear_combinations[line_index] = linear_combination
+    def get_params(self) -> List[int]:
+        params = []
+        for transformation in self.transformations:
+            params += transformation.get_params()
+        return params
 
-    def get_linear_combination(self, line_index: int) -> Polynomial:
-        assert 0 <= line_index < self.n_lines
-        return self.linear_combinations[line_index]
+    def set_params(self, params: List[int]) -> None:
+        param_index = 0
+        for transformation in self.transformations:
+            n_params_for_transformation = transformation.get_n_params()
+            transformation_params = params[
+                param_index: param_index + n_params_for_transformation
+            ]
+            transformation.set_params(transformation_params)
+            param_index += n_params_for_transformation
 
     def __str__(self) -> str:
-        s = 'SECRET KEY:'
-        s += '\n\n-> ' + str(self.n_lines) + ' lines (ie output variables)'
-        s += '\n-> ' + str(self.n_compositions) + ' compositions per line'
-        s += '\n-> ' + str(self.n_variables) + ' input variables'
-        for line_index in range(self.n_lines):
-            s += '\n\nline number '+str(line_index+1)+' :  '
-            for quadratic_polynomial_index in range(self.n_compositions-1, -1, -1):
-                quadratic_polynomial = self.quadratic_polynomials[line_index][quadratic_polynomial_index]
-                quadratic_polynomial.set_alphabet(['X'])
-                s += '(' + str(quadratic_polynomial) + ') o '
-            linear_combination = self.linear_combinations[line_index]
-            s += '(' + str(linear_combination) + ')'
-        s += '\n\n'
+        s = "SECRET KEY:"
+        s += "\n-> " + "p = " + str(specs.p)
+        s += "\n-> " + "dimensions: = " + str(self.dimensions)
+        for index in range(self.get_n_transformations()):
+            s += (
+                "\n\ntransformation "
+                + str(index)
+                + ":\n\n"
+                + str(self.transformations[index])
+            )
+        s += "\n\n"
         return s
 
 
 class PublicKey:
-    """A public key consists in a list of 'n_lines' (multivariate) 'Polynomial's.
-    They all have 'n_variables' variables.
+    """A public key consists in a list of 'n_output' (multivariate) Polynomials.
+    They all have 'n_input' variables.
     """
 
-    def __init__(self, n_lines: int, n_variables: int) -> None:
-        self.n_lines = n_lines
-        self.n_variables = n_variables
-        self.polynomials = [Polynomial(n_variables) for _ in range(n_lines)]
+    def __init__(self, n_input: int, n_output: int) -> None:
+        self.n_output = n_output
+        self.n_input = n_input
+        self.polynomials = [Polynomial(n_input) for _ in range(n_output)]
 
-    def get_number_of_variables(self) -> int:
-        return self.n_variables
+    def get_n_input(self) -> int:
+        return self.n_input
 
-    def get_number_of_lines(self) -> int:
-        return self.n_lines
+    def get_n_output(self) -> int:
+        return self.n_output
 
-    def set_polynomial(self, line_index: int, multivariate_polynomial: Polynomial) -> None:
-        assert 0 <= line_index < self.n_lines
-        self.polynomials[line_index] = multivariate_polynomial
+    def set_polynomial(
+        self, index: int, multivariate_polynomial: Polynomial
+    ) -> None:
+        assert 0 <= index < self.n_output
+        self.polynomials[index] = multivariate_polynomial
 
-    def get_polynomial(self, line_index: int) -> Polynomial:
-        assert 0 <= line_index < self.n_lines
-        return self.polynomials[line_index]
+    def get_polynomial(self, output_index: int) -> Polynomial:
+        assert 0 <= output_index < self.n_output
+        return self.polynomials[output_index]
 
     def __str__(self) -> str:
 
-        s = 'PUBLIC KEY:'
-        s += '\n\n-> ' + str(self.n_lines) + ' lines (ie output variables)'
-        s += '\n-> ' + str(self.n_variables) + ' input variables'
-        for line_index in range(self.n_lines):
+        s = "PUBLIC KEY:"
+        s += (
+            "\n\n-> "
+            + "p = "
+            + str(specs.p)
+            + " (these multivariate polynomials must be considered modulo p)"
+        )
+        s += "\n-> " + str(self.n_output) + " lines (ie output variables)"
+        s += "\n-> " + str(self.n_input) + " input variables"
+        for line_index in range(self.n_output):
             polynomial = self.polynomials[line_index]
-            s += '\n\nline number '+str(line_index+1)+' :  ' + str(polynomial)
-        s += '\n\n'
+            s += (
+                "\n\nline number "
+                + str(line_index + 1)
+                + " :  "
+                + str(polynomial)
+            )
+        s += "\n\n"
         return s
 
 
-def generate_random_quadratic_polynomial() -> Polynomial:
-    pol = Polynomial(1)
-    for coef_index in range(3):
-        pol.set_coef((coef_index,), random.randint(1, specs.p-1))
-    return pol
-
-
-def generate_random_linear_combination(n_variables: int) -> Polynomial:
-    lin = Polynomial(n_variables)
-    lin.set_coef(get_tuple_index(-1, n_variables),
-                 random.randint(1, specs.p-1))
-    for variable_index in range(n_variables):
-        lin.set_coef(get_tuple_index(variable_index, n_variables),
-                     random.randint(1, specs.p-1))
-    return lin
-
-
-def generate_random_secret_key(n_lines: int, n_compositions: int, n_variables: int, verbose=False) -> SecretKey:
-    if verbose:
-        print('generating random secret key ...')
-    secret_key = SecretKey(n_lines, n_compositions, n_variables)
-    for line_index in range(n_lines):
-        random_linear_combination = generate_random_linear_combination(
-            n_variables)
-        secret_key.set_linear_combination(
-            line_index, random_linear_combination)
-        for polynomial_index in range(n_compositions):
-            random_quadratic_polynomial = generate_random_quadratic_polynomial()
-            secret_key.set_quadratic_polynomial(
-                line_index, polynomial_index, random_quadratic_polynomial)
+def generate_random_secret_key(dimensions: List[int]) -> SecretKey:
+    secret_key = SecretKey(dimensions)
+    for transformation in secret_key.transformations:
+        transformation.set_random_coefs()
     return secret_key
 
 
-def generate_public_key(secret_key: SecretKey, verbose=False) -> PublicKey:
+def get_symbol_coef(symbol_index: int, n_total_symbols: int):
+    pol = Polynomial(n_total_symbols)
+    pol.set_coef(get_tuple_index(symbol_index, n_total_symbols), 1)
+    return pol
+
+
+def generate_public_key(secret_key: SecretKey, verbose: bool) -> PublicKey:
     if verbose:
-        print('generating public key ...')
-    public_key = PublicKey(secret_key.n_lines, secret_key.n_variables)
-    for line_index in range(secret_key.n_lines):
-        multivariate_polynomial = secret_key.get_linear_combination(line_index)
-        for quadratic_polynomial_index in range(secret_key.n_compositions):
-            quadratic_polynomial = secret_key.get_quadratic_polynomial(
-                line_index, quadratic_polynomial_index)
-            multivariate_polynomial = compose(
-                quadratic_polynomial, multivariate_polynomial)
-        public_key.set_polynomial(line_index, multivariate_polynomial)
+        print("generating public key:")
+    public_key = PublicKey(secret_key.get_n_input(), secret_key.get_n_output())
+    n_input = secret_key.get_n_input()
+    vector = Vector(n_input)
+    for var_index in range(0, n_input):
+        pol_var = Polynomial(n_input)
+        pol_var.set_coef(get_tuple_index(var_index, n_input), 1)
+        vector[var_index] = pol_var
+    for transformation in secret_key.transformations:
+        vector = transformation.eval(vector)
+
+    for index in range(len(vector)):
+        polynomial = vector[index]
+        public_key.set_polynomial(index, polynomial)
+
     return public_key
 
 
-def encrypt(message: Tuple, public_key: PublicKey) -> Tuple:
-    """message : a tuple of integers"""
-    assert len(message) == public_key.get_number_of_variables()
-    encrypted_message = [0 for _ in range(public_key.get_number_of_lines())]
-    for line_index in range(public_key.get_number_of_lines()):
-        encrypted_message[line_index] = public_key.get_polynomial(
-            line_index).eval(message)
-    return tuple(encrypted_message)
+def encrypt(message: Vector, public_key: PublicKey) -> Vector:
+    """message : a Vector of integers"""
+    assert len(message) == public_key.get_n_input()
+    encrypted_message = Vector(public_key.get_n_output())
+    for line_index in range(public_key.get_n_output()):
+        encrypted_message[line_index] = eval_polynomial(
+            public_key.get_polynomial(line_index), message
+        )
+    return encrypted_message
 
 
-def next_combination(combination: list, max_combination: List) -> bool:
-    """Combination means here a list of integers.
-
-    Returns false when the combination is the higher we can get,
-    and cannot consequentally be increased.
-
-    For instance:
-    max_combination = (5, 7, 3, 4, 5, 5, 9)
-
-    combination = (4, 6, 2, 1, 0, 1, 4) will become
-    (0, 0, 0, 2, 0, 1, 4)
-
-   """
-
-    assert len(combination) == len(max_combination)
-    for i in range(len(combination)):
-        if combination[i] == max_combination[i] - 1:
-            combination[i] = 0
-        else:
-            combination[i] += 1
-            return True
-    return False
-
-
-def decrypt(encrypted_message: Tuple, secret_key: SecretKey):
+def decrypt(encrypted_message: Vector, secret_key: SecretKey):
     """Returns a set containing all the possible decrypted messages
     (tuple of int) correspnding to encrypted_message (tuple of int).
     """
-    assert len(encrypted_message) == secret_key.get_number_of_lines()
+    assert len(encrypted_message) == secret_key.get_n_output()
 
-    n_compositions = secret_key.get_number_of_polynomials_per_line()
-    n_lines = secret_key.get_number_of_lines()
-    n_variables = secret_key.get_number_of_variables()
+    solutions = [encrypted_message]
 
-    potential_values_for_linear_combinations = [[] for _ in range(n_lines)]
+    for transformation in secret_key.transformations[::-1]:
+        copy_solutions = deepcopy(solutions)
+        solutions = []
+        for sol in copy_solutions:
+            solutions += transformation.inverse(sol)
 
-    for line_index in range(n_lines):
-        values = [encrypted_message[line_index]]
-        for pol_index in range(n_compositions - 1, -1, -1):
-            quadratic_polynomial = secret_key.get_quadratic_polynomial(
-                line_index, pol_index)
-            new_values = []
-            for v in values:
-                new_values += solve_quadratic_polynomial(
-                    quadratic_polynomial,
-                    v)
-            values = new_values
-        potential_values_for_linear_combinations[line_index] = values
+    return solutions
 
-    solutions = []
 
-    combination = [-1] + [0 for _ in range(-1 + n_lines)]
-    max_combination = [len(potential_values_for_linear_combinations[line_index])
-                       for line_index in range(n_lines)]
-    linear_system = [secret_key.get_linear_combination(
-        line_index) for line_index in range(n_lines)]
+def generate_symbolic_secret_key(dimensions: List[int]) -> SecretKey:
+    secret_key = SecretKey(dimensions)
+    n_params = secret_key.get_n_params()
+    symbol_index = 0
+    for transformation in secret_key.transformations:
+        transformation_n_params = transformation.get_n_params()
+        transformation_params = [None] * transformation_n_params
+        for param_index in range(0, transformation_n_params):
+            transformation_params[param_index] = get_symbol_coef(
+                symbol_index, n_params
+            )
+            symbol_index += 1
+        transformation.set_params(transformation_params)
+    return secret_key
 
-    while next_combination(combination, max_combination):
-        values_eq = []
-        for line_index in range(n_lines):
-            val = potential_values_for_linear_combinations[line_index][combination[line_index]]
-            values_eq.append(val)
-        solutions += solve_linear_system_eq(linear_system, values_eq)
-    return set([tuple(sol) for sol in solutions])
+
+def generate_system_needed_to_break_secret_key_security(
+    dimensions,
+) -> List[Polynomial]:
+    """Recovering the public key from the secret key is equivalent to
+    solving a system of multivariate polynomials. Returns a example of such
+    a system
+    """
+
+    int_secret_key = generate_random_secret_key(dimensions)
+    int_public_key = generate_public_key(int_secret_key, verbose=False)
+
+    symbolic_secret_key = generate_symbolic_secret_key(dimensions)
+
+    symbolic_public_key = generate_public_key(
+        symbolic_secret_key, verbose=False
+    )
+    print(symbolic_public_key)
+
+    system_needed_to_break_secret_key_security = []
+    for polynomial_index in range(dimensions[-1]):
+        for coef_index in symbolic_public_key.get_polynomial(
+            polynomial_index
+        ).coefs:
+            int_value = int_public_key.get_polynomial(
+                polynomial_index
+            ).get_coef(coef_index)
+            polynomial_value = symbolic_public_key.get_polynomial(
+                polynomial_index
+            ).get_coef(coef_index)
+            line = substract(polynomial_value, int_value)
+            system_needed_to_break_secret_key_security.append(line)
+    return system_needed_to_break_secret_key_security

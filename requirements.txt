@@ -1,2 +1,0 @@
-matplotlib==3.4.2
-sympy==1.9
