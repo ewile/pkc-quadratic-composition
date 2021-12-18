@@ -1,7 +1,7 @@
 # Public key cryptography with polynomial composition
 
 Implementation of a new scheme for public key cryptography.
-<br>This code is educational and research oriented. It is a tool to facilitate further investigation on the security of this protocol.
+<br>This code is oriented towards education and research. It is a tool to facilitate further research on the security of this protocol.
 <br>Paper (preprint): https://eprint.iacr.org/2021/1476/20211217:102712 <br> (This is the second version of the protocol, the first version was broken. More details can be found in the paper).
 
 ## Quick start
